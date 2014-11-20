@@ -45,7 +45,9 @@ module MassRecord
 			},synonyms:{
 				insert: [:create, :new, :add, :insert, :post],
 				update: [:update,:edit,:modify,:put,:patch],
-				select: [:read,:select,:get]
+				select: [:read,:select,:get],
+				save:   [:save],
+				delete: [:delete]
 			},folder:{
 				queued:path[:queued_queries],
 				errored:path[:errored_queries],
@@ -65,7 +67,6 @@ module MassRecord
 					json_objects += json
 				end
 			end
-
 			# validate all objects
 			json_objects = mass_validate json_objects
 
@@ -82,9 +83,9 @@ module MassRecord
 					errors[:insert] = mass_insert_by_table json_objects.select{|x| synonyms[:insert].include? x[key[:operation]].to_sym.downcase}, key:key
 				elsif synonyms[:update].include? op
 					errors[:update] = mass_update_by_table json_objects.select{|x| synonyms[:update].include? x[key[:operation]].to_sym.downcase}, key:key
-				elsif op == :save	# needs to intelligently determine if the order already exists, insert if not, update if so
+				elsif synonyms[:save].include? op	# needs to intelligently determine if the order already exists, insert if not, update if so
 					errors[:save] = mass_save_by_table json_objects.select{|x| :save == x[key[:operation]].to_sym.downcase}, key:key
-				elsif op == :delete
+				elsif synonyms[:delete].include? op
 				elsif synonyms[:select].include? op
 				else
 				end
@@ -94,11 +95,41 @@ module MassRecord
 			database_connection.close
 
 			# move to appropriate folder and remove '.processing' from the filename
+			errors_present = errors.any?{|op,tables| tables.has_key? :run_time or tables.any?{|table,col_sets| !table.blank?}}
+			errored_objects = collect_errored_objects found_in:errors, from:json_objects, key:key, synonyms:synonyms if errors_present
+
+debugger
+
+			
 			files = Dir.foreach(folder[:queued]).collect{|x| x}.keep_if{|y|y=~/\.json\.processing$/i}
-			errors_present = errors.any?{|op,h| h.any?{|table,a| a.count > 0 }}
 			files.each{|x| File.rename "#{folder[:queued]}/#{x}","#{errors_present ? folder[:errored] : folder[:completed]}/group_#{file_tag}_#{x.gsub /\.processing$/,''}"}
 
 			return errors
+		end
+
+		def collect_errored_objects found_in:{}, from:[], key:{}, synonyms:{}
+			return [] if found_in.blank? or from.blank?
+
+			errored_objects = []
+
+			found_in.each do |operation, tables|
+				tables.each do |table, column_sets|
+					column_sets.each do |column_set,error|
+						if error.is_a? Exception and error.is_a? ActiveRecord::StatementInvalid
+							# collect objects by operation, table, and column set
+							operation_terms = synonyms[operation.to_sym]
+							errored_objects += from.select{|x| table.to_s == x[key[:table]].to_s and operation_terms.include? x[key[:operation]].to_sym and x[key[:object]].keys.sort == column_set.sort}
+						end
+					end
+				end
+			end
+
+			return errored_objects
+		end
+
+		def query_per_object objects
+
+
 		end
 
 		def mass_validate objects
@@ -113,12 +144,12 @@ module MassRecord
 				errors = {}
 				tables.each do |table|
 					hashes = json_objects.select{|o| o[key[:table]] == table}.collect{|x| x[key[:object]]}
-					errors[table.to_sym] = mass_update hashes, into:table
+					errors[table.to_sym].merge! mass_update hashes, into:table
 				end
 				return errors
 			rescue Exception => e
-				return {method:e} unless defined? errors
-				errors[:method] = e if defined? errors
+				return {run_time:e} unless defined? errors
+				errors[:run_time] = e if defined? errors
 				return errors
 			end
 		end
@@ -153,16 +184,16 @@ module MassRecord
 						insert_hashes = hashes.reject{|x| existing_ids.include? x[pk].to_s}
 						update_hashes = hashes.select{|x| existing_ids.include? x[pk].to_s}
 					end
-
+debugger
 					# perform the appropriate operations
-					errors[table.to_sym] = []
-					errors[table.to_sym] += mass_update update_hashes, into:model unless update_hashes.blank?
-					errors[table.to_sym] += mass_insert insert_hashes, into:model unless insert_hashes.blank?
+					errors[table.to_sym] = {}
+					errors[table.to_sym].merge! mass_update update_hashes, into:model unless update_hashes.blank?
+					errors[table.to_sym].merge! mass_insert insert_hashes, into:model unless insert_hashes.blank?
 				end	
 				return errors
 			rescue Exception => e
-				return {method:e} unless defined? errors
-				errors[:method] = e if defined? errors
+				return {run_time:e} unless defined? errors
+				errors[:run_time] = e if defined? errors
 				return errors
 			end
 		end
@@ -187,9 +218,9 @@ module MassRecord
 					unique_column_sets[column_set] << hash
 				end
 
-				# assemble list of queries (1 for each unique set of columns)
+				# assemble and execute queries (1 for each unique set of columns)
 				queries = []
-
+				errors = {}
 				unique_column_sets.each do |column_set, hash_group|
 					if id_column_name.is_a? Array
 						ids = hash_group.collect{|hash| Hash[id_column_name.map.with_index{|column_name,i| [column_name,hash[column_name]] }]}
@@ -245,22 +276,17 @@ module MassRecord
 						set_columns << "#{column} = CASE #{values.join ' '} END" if id_column_name.is_a? Array
 					end
 
-					queries << "#{update} #{set_columns.join ', '} #{where}"
-				end
-				# [{"id"=>545, "header"=>"new system","details"=>"ya, it worked"},{"id"=>546, "header"=>"sweet system"},{"id"=>547, "header"=>"THAT system","details"=>"ya, it worked"}]
-				errors = []
-				# execute the queries
-				queries.each do |sql|
 					begin
-						query sql
+						query "#{update} #{set_columns.join ', '} #{where}"
 					rescue Exception => e
 						puts e.message
-						errors << e
+						errors[column_set] = e
 					end
-				end	
+				end
+
 				return errors		
 			rescue Exception => e
-				return (defined? errors) ? (errors << e) : [e]
+				return (defined? errors) ? (errors.merge!({run_time:e})) : {run_time:e}
 			end
 		end
 
@@ -271,12 +297,12 @@ module MassRecord
 				errors = {}
 				tables.each do |table|
 					hashes = json_objects.select{|o| o[key[:table]] == table}.collect{|x| x[key[:object]]}
-					errors[table.to_sym] = mass_insert hashes, into:table
+					errors[table.to_sym].merge! mass_insert hashes, into:table
 				end
 				return errors
 			rescue Exception => e
-				return {method:e} unless defined? errors
-				errors[:method] = e if defined? errors
+				return {run_time:e} unless defined? errors
+				errors[:run_time] = e if defined? errors
 				return errors
 			end
 		end
@@ -292,8 +318,11 @@ module MassRecord
 				updated_at = model.attribute_alias?("updated_at") ? model.attribute_alias("updated_at") : "updated_at"
 				solitary_queries = []
 				t = model.arel_table
+				concentrated_queries = {}
 
 				hashes.each do |h|
+					# assemble an individual query
+					original_key_set = h.keys
 					im = Arel::InsertManager.new(ActiveRecord::Base)
 					unless id_column_name.is_a? Array 	# don't modify the id fields if there are concatenated primary keys
 						h.delete id_column_name if model.columns.select{|x| x.name == id_column_name}.first.extra == 'auto_increment' or h[id_column_name].blank?
@@ -303,31 +332,33 @@ module MassRecord
 						[t[k.to_sym],v]
 					end
 					im.insert pairs
-					solitary_queries << im.to_sql
+					sql = im.to_sql
+
+					# group the queries by unique column lists
+					into_clause = sql.gsub /\s*VALUES.*$/,''
+					value_clause = sql.gsub(/^.*VALUES\s*/,'')
+					
+					concentrated_queries[original_key_set] = {} unless concentrated_queries[original_key_set].is_a? Hash
+					concentrated_queries[original_key_set][:into] = into_clause
+					concentrated_queries[original_key_set][:values] = [] unless concentrated_queries[original_key_set].is_a? Array
+					concentrated_queries[original_key_set][:values] << value_clause
+
 				end
 
-				# group the queries by unique column lists
-				concentrated_queries = {}
+				errors = {}
 
-				solitary_queries.each do |q|
-					k = q.gsub /\s*VALUES.*$/,''
-					concentrated_queries[k] = [] unless concentrated_queries.has_key? k and concentrated_queries[k].is_a? Array
-					concentrated_queries[k] << q.gsub(/^.*VALUES\s*/,'')
-				end
-
-				errors = []
 				# reparse the queries and execute them
-				concentrated_queries.each do |k,v|
+				concentrated_queries.each do |column_set,clauses|
 					begin
-						query "#{k} VALUES #{v.join(", ")}"				
+						query "#{clauses[:into]} VALUES #{clauses[:values].join(", ")}"				
 					rescue Exception => e
 						puts e.message
-						errors << e
+						errors[column_set] = e
 					end
 				end
 				return errors
 			rescue Exception => e
-				return (defined? errors) ? (errors << e) : [e]
+				return (defined? errors) ? (errors.merge!({run_time:e})) : {run_time:e}
 			end
 		end
 

@@ -10,8 +10,8 @@ Gem::Specification.new do |s|
   s.authors     = ["Nathan Hanna"]
   s.email       = ["jnathanhdev@gmail.com"]
   s.homepage    = "https://github.com/jnathanh/mass_record"
-  s.summary     = "Makes inserts, updates, deletes, and validations go faster than ActiveRecord..."
-  s.description = "Makes inserts, updates, deletes, and validations go faster than ActiveRecord"
+  s.summary     = "A Ruby on Rails library to help with mass database operations like insert, update, save, validations, etc (much faster than typical ActiveRecord Interactions..."
+  s.description = "A Ruby on Rails library to help with mass database operations like insert, update, save, validations, etc (much faster than typical ActiveRecord Interactions"
   s.license     = "MIT"
 
   s.files = Dir["{app,config,db,lib}/**/*", "MIT-LICENSE", "Rakefile", "README.rdoc"]
