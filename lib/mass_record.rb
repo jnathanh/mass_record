@@ -9,6 +9,7 @@ module MassRecord
 	self.path[:errored_queries] = "tmp/#{Rails.env}"
 	self.path[:completed_queries] = "tmp/#{Rails.env}"
 
+
 	module Actions
 		path = {}
 		folder_path = "tmp/#{Rails.env}"
@@ -16,6 +17,27 @@ module MassRecord
 		path[:queued_queries] = "#{path[:queries]}/queued"
 		path[:errored_queries] = "#{path[:queries]}/errored"
 		path[:completed_queries] = "#{path[:queries]}/completed"
+
+		class IndividualError < Exception
+			attr_accessor :operation,:table,:json_object,:original_exception,:backtrace,:backtrace_locations,:cause,:exception,:message
+
+			def initialize exception, json_object:nil, operation:nil, table:nil
+				self.backtrace = exception.backtrace
+				self.backtrace_locations = exception.backtrace_locations
+				self.cause = exception.cause
+				self.exception = exception.exception
+				self.message = exception.message
+
+				self.original_exception = exception
+				self.json_object = json_object
+				self.operation = operation
+				self.table = table
+			end
+
+			def to_s
+				original_exception.to_s
+			end
+		end
 
 		# accepts an array of objects with the option to specify what rails operation to perform
 		def queue_for_quick_query object_array, 
@@ -67,6 +89,7 @@ module MassRecord
 					json_objects += json
 				end
 			end
+
 			# validate all objects
 			json_objects = mass_validate json_objects
 
@@ -92,19 +115,36 @@ module MassRecord
 			end
 
 			# close database connection
-			database_connection.close
 
 			# move to appropriate folder and remove '.processing' from the filename
 			errors_present = errors.any?{|op,tables| tables.has_key? :run_time or tables.any?{|table,col_sets| !table.blank?}}
 			errored_objects = collect_errored_objects found_in:errors, from:json_objects, key:key, synonyms:synonyms if errors_present
 
-debugger
-
+			individual_errors = errors_present ? (query_per_object errored_objects, key:key, synonyms:synonyms) : []
+			database_connection.close
 			
 			files = Dir.foreach(folder[:queued]).collect{|x| x}.keep_if{|y|y=~/\.json\.processing$/i}
 			files.each{|x| File.rename "#{folder[:queued]}/#{x}","#{errors_present ? folder[:errored] : folder[:completed]}/group_#{file_tag}_#{x.gsub /\.processing$/,''}"}
 
-			return errors
+			individual_errors += collect_run_time_errors found_in:errors
+			return individual_errors
+		end
+
+		def collect_run_time_errors found_in:{}, loop_limit:10
+			return [] if found_in.blank?
+			run_time_errors = []
+
+			while found_in.is_a? Hash and loop_limit > 0
+				loop_limit -= 1
+				found_in.each do |k,v|
+					if k == :run_time
+						run_time_errors << v
+					else 
+						run_time_errors += collect_run_time_errors found_in:v, loop_limit:loop_limit
+					end
+				end
+			end
+			return run_time_errors
 		end
 
 		def collect_errored_objects found_in:{}, from:[], key:{}, synonyms:{}
@@ -113,12 +153,18 @@ debugger
 			errored_objects = []
 
 			found_in.each do |operation, tables|
-				tables.each do |table, column_sets|
-					column_sets.each do |column_set,error|
-						if error.is_a? Exception and error.is_a? ActiveRecord::StatementInvalid
-							# collect objects by operation, table, and column set
-							operation_terms = synonyms[operation.to_sym]
-							errored_objects += from.select{|x| table.to_s == x[key[:table]].to_s and operation_terms.include? x[key[:operation]].to_sym and x[key[:object]].keys.sort == column_set.sort}
+				unless operation == :run_time
+					tables.each do |table, column_sets|
+						unless table == :run_time
+							column_sets.each do |column_set,error|
+								unless column_set == :run_time
+									if error.is_a? Exception and error.is_a? ActiveRecord::StatementInvalid
+										# collect objects by operation, table, and column set
+										operation_terms = synonyms[operation.to_sym]
+										errored_objects += from.select{|x| table.to_s == x[key[:table]].to_s and operation_terms.include? x[key[:operation]].to_sym and x[key[:object]].keys.sort == column_set.sort}
+									end
+								end
+							end
 						end
 					end
 				end
@@ -127,9 +173,202 @@ debugger
 			return errored_objects
 		end
 
-		def query_per_object objects
+		def query_per_object objects, key:{}, synonyms:{}
+			# get all operations and tables in use
+			operations = objects.collect{|x| x[key[:operation]].to_sym}.to_set.to_a
 
+			# construct queries
+			errors = []
+			operations.each do |op|
+				if synonyms[:insert].include? op
+					errors += insert_by_table objects.select{|x| synonyms[:insert].include? x[key[:operation]].to_sym.downcase}, key:key
+				elsif synonyms[:update].include? op
+					errors += update_by_table objects.select{|x| synonyms[:update].include? x[key[:operation]].to_sym.downcase}, key:key
+				elsif synonyms[:save].include? op	# needs to intelligently determine if the order already exists, insert if not, update if so
+					errors += save_by_table objects.select{|x| :save == x[key[:operation]].to_sym.downcase}, key:key
+				elsif synonyms[:delete].include? op
+				elsif synonyms[:select].include? op
+				else
+				end
+			end
+			return errors
+		end
 
+		def update_by_table json_objects, key:{}
+			begin
+				tables = json_objects.collect{|x| x[key[:table]]}.to_set.to_a
+
+				errors = []
+				tables.each do |table|
+					hashes = json_objects.select{|o| o[key[:table]] == table}.collect{|x| x[key[:object]]}
+					errors += update hashes, into:table
+				end
+				return errors
+			rescue Exception => e
+				return ((defined? errors) ? (errors << IndividualError.new(e,operation:"update")) : [IndividualError.new(e,operation:"update")])
+			end
+		end
+
+		def sort_save_operations from:nil, for_table:nil, key:{}
+			return {} if from.blank? or for_table.blank?
+			table = for_table
+			hashes = from.select{|o| o[key[:table]] == table}.collect{|x| x[key[:object]]}
+			model = table.classify.constantize
+			pk = model.primary_key
+
+			# organize hashes based on whether they exist (based on their primary key(s)) in the table or not
+			if pk.is_a? Array
+				ids = hashes.reject{|x| pk.any?{|k| x[k].blank?}}.collect{|x| x.select{|k,v| pk.include? k}}	# only accept full sets of pk's
+				where_clauses = []
+				ids.each do |id|
+					equivalence_clauses = []
+					id.each do |k,v|
+						equivalence_clauses << "#{ActiveRecord::Base.connection.quote_column_name k} = #{ActiveRecord::Base.connection.quote(ActiveRecord::Base.connection.type_cast(v, model.column_types[k]))}"
+					end
+					where_clauses << "(#{equivalence_clauses.join ' and '})"
+				end
+				existing_id_sets = ActiveRecord::Base.connection.execute("SELECT #{pk.join ', '} FROM #{table} WHERE #{where_clauses.join ' OR '}").collect{|x| Hash[x.map.with_index{|x,i| [pk[i],x]}]}
+				insert_hashes = hashes.reject{|h| existing_id_sets.any?{|set| h == h.merge(set)}}
+				update_hashes = hashes.select{|h| existing_id_sets.any?{|set| h == h.merge(set)}}
+			else
+				ids = hashes.reject{|x| x[pk].blank?}.collect{|x| x[pk]}	# should not include null values
+				existing_ids = ActiveRecord::Base.connection.execute("SELECT #{pk} FROM #{table} WHERE #{pk} in ('#{ids.join "','"}')").collect{|x| x.first.to_s}
+				insert_hashes = hashes.reject{|x| existing_ids.include? x[pk].to_s}
+				update_hashes = hashes.select{|x| existing_ids.include? x[pk].to_s}
+			end
+
+			return {insert:insert_hashes,update:update_hashes}
+		end
+
+		def save_by_table json_objects, key:{}			
+			begin
+				tables = json_objects.collect{|x| x[key[:table]]}.to_set.to_a
+
+				errors = []
+				tables.each do |table|
+					# sort the hashes by operation type
+					sorted_hashes = sort_save_operations from:json_objects, for_table:table, key:key
+
+					# perform the appropriate operations
+					model = table.classify.constantize
+					errors += update sorted_hashes[:update], into:model unless sorted_hashes[:update].blank?
+					errors += insert sorted_hashes[:insert], into:model unless sorted_hashes[:insert].blank?
+				end	
+				return errors
+			rescue Exception => e
+				return ((defined? errors) ? (errors << IndividualError.new(e,operation:"save")) : [IndividualError.new(e,operation:"save")])
+			end
+		end
+
+		def insert_by_table json_objects, key:{}
+			begin
+				tables = json_objects.collect{|x| x[key[:table]]}.to_set.to_a
+
+				errors = []
+				tables.each do |table|
+					hashes = json_objects.select{|o| o[key[:table]] == table}.collect{|x| x[key[:object]]}
+					errors += insert hashes, into:table
+				end
+				return errors
+			rescue Exception => e
+				return ((defined? errors) ? (errors << IndividualError.new(e,operation:"insert")) : [IndividualError.new(e,operation:"insert")])
+			end
+		end
+
+		def sql_for_insert hash, into:nil
+			return nil if hash.blank? or into.blank?
+			model = into.is_a?(String) ? into.classify.constantize : into
+			id_column_name = model.primary_key
+			created_at = model.attribute_alias?("created_at") ? model.attribute_alias("created_at") : "created_at"
+			updated_at = model.attribute_alias?("updated_at") ? model.attribute_alias("updated_at") : "updated_at"
+			t = model.arel_table
+
+			h = hash.clone	# use a copy of hash, so it doesn't change the original data
+
+			# assemble an individual query
+			im = Arel::InsertManager.new(ActiveRecord::Base)
+			unless id_column_name.is_a? Array 	# don't modify the id fields if there are concatenated primary keys
+				h.delete id_column_name if model.columns.select{|x| x.name == id_column_name}.first.extra == 'auto_increment' or h[id_column_name].blank?
+			end
+			h = convert_to_db_format h, model:model, created_at:created_at, updated_at:updated_at
+			pairs = h.collect do |k,v|
+				[t[k.to_sym],v]
+			end
+			im.insert pairs
+			im.to_sql
+		end
+
+		def sql_for_update hash, into:nil
+			return nil if hash.blank? or into.blank?
+			model = into.is_a?(String) ? into.classify.constantize : into
+			id_column_name = model.primary_key
+			created_at = model.attribute_alias?("created_at") ? model.attribute_alias("created_at") : "created_at"
+			updated_at = model.attribute_alias?("updated_at") ? model.attribute_alias("updated_at") : "updated_at"
+			t = model.arel_table
+
+			h = hash.clone	# use a copy of hash, so it doesn't change the original data
+			h = convert_to_db_format h, model:model, created_at:created_at, updated_at:updated_at
+
+			# assemble an individual query
+			um = Arel::UpdateManager.new(ActiveRecord::Base)
+			um.where(t[id_column_name.to_sym].eq(h[id_column_name])) unless id_column_name.is_a? Array
+			id_column_name.each{|key| um.where t[key.to_sym].eq(h[key])} if id_column_name.is_a? Array
+			um.table(t)
+			id_column_name.each{|name| h.delete name} if id_column_name.is_a? Array 	# don't allow modification of the primary keys
+			h.delete id_column_name if id_column_name.is_a? String						# don't allow modification of the primary keys
+			pairs = h.collect do |k,v|
+				[t[k.to_sym],v]
+			end
+			um.set pairs
+			um.to_sql
+		end
+
+		def update hashes, into:nil
+			begin
+				return false if hashes.blank? or into.blank?
+				hashes = [hashes] unless hashes.is_a? Array
+
+				errors = []
+				# create an array of single insert queries
+				hashes.each do |hash|
+					sql = sql_for_insert hash, into:into
+	
+					begin
+						query sql
+					rescue Exception => e
+						puts e.message
+						errors << IndividualError.new(e,table:into,operation:"update",json_object:hash)
+					end
+				end
+				return errors
+			rescue Exception => e
+				return (defined? errors) ? (errors << IndividualError.new(e, table:into, operation:"update")) : [IndividualError.new( e, table:into, operation:"update")]
+			end
+		end
+
+		def insert hashes, into:nil
+			begin
+				return false if hashes.blank? or into.blank?
+				hashes = [hashes] unless hashes.is_a? Array
+
+				errors = []
+				# create an array of single insert queries
+				hashes.each do |hash|
+					sql = sql_for_insert hash, into:into
+	
+					begin
+						query sql
+					rescue Exception => e
+						puts e.message
+						errors << IndividualError.new(e,table:into,operation:"insert",json_object:hash)
+					end
+				end
+
+				# reparse the queries and execute them
+				return errors
+			rescue Exception => e
+				return (defined? errors) ? (errors << IndividualError.new(e, table:into, operation:"insert")) : [IndividualError.new( e, table:into, operation:"insert")]
+			end
 		end
 
 		def mass_validate objects
@@ -144,6 +383,8 @@ debugger
 				errors = {}
 				tables.each do |table|
 					hashes = json_objects.select{|o| o[key[:table]] == table}.collect{|x| x[key[:object]]}
+
+					errors[table.to_sym] = {} unless errors[table.to_sym].is_a? Hash
 					errors[table.to_sym].merge! mass_update hashes, into:table
 				end
 				return errors
@@ -160,36 +401,15 @@ debugger
 
 				errors = {}
 				tables.each do |table|
-					hashes = json_objects.select{|o| o[key[:table]] == table}.collect{|x| x[key[:object]]}
-					model = table.classify.constantize
-					pk = model.primary_key
+					# sort the hashes by operation type
+					sorted_hashes = sort_save_operations from:json_objects, for_table:table, key:key
 
-					# organize hashes based on whether they exist (based on their primary key(s)) in the table or not
-					if pk.is_a? Array
-						ids = hashes.reject{|x| pk.any?{|k| x[k].blank?}}.collect{|x| x.select{|k,v| pk.include? k}}	# only accept full sets of pk's
-						where_clauses = []
-						ids.each do |id|
-							equivalence_clauses = []
-							id.each do |k,v|
-								equivalence_clauses << "#{ActiveRecord::Base.connection.quote_column_name k} = #{ActiveRecord::Base.connection.quote(ActiveRecord::Base.connection.type_cast(v, model.column_types[k]))}"
-							end
-							where_clauses << "(#{equivalence_clauses.join ' and '})"
-						end
-						existing_id_sets = ActiveRecord::Base.connection.execute("SELECT #{pk.join ', '} FROM #{table} WHERE #{where_clauses.join ' OR '}").collect{|x| Hash[x.map.with_index{|x,i| [pk[i],x]}]}
-						insert_hashes = hashes.reject{|h| existing_id_sets.any?{|set| h == h.merge(set)}}
-						update_hashes = hashes.select{|h| existing_id_sets.any?{|set| h == h.merge(set)}}
-					else
-						ids = hashes.reject{|x| x[pk].blank?}.collect{|x| x[pk]}	# should not include null values
-						existing_ids = ActiveRecord::Base.connection.execute("SELECT #{pk} FROM #{table} WHERE #{pk} in ('#{ids.join "','"}')").collect{|x| x.first.to_s}
-						insert_hashes = hashes.reject{|x| existing_ids.include? x[pk].to_s}
-						update_hashes = hashes.select{|x| existing_ids.include? x[pk].to_s}
-					end
-debugger
 					# perform the appropriate operations
+					model = table.classify.constantize
 					errors[table.to_sym] = {}
-					errors[table.to_sym].merge! mass_update update_hashes, into:model unless update_hashes.blank?
-					errors[table.to_sym].merge! mass_insert insert_hashes, into:model unless insert_hashes.blank?
-				end	
+					errors[table.to_sym].merge! mass_update sorted_hashes[:update], into:model unless sorted_hashes[:update].blank?
+					errors[table.to_sym].merge! mass_insert sorted_hashes[:insert], into:model unless sorted_hashes[:insert].blank?
+				end
 				return errors
 			rescue Exception => e
 				return {run_time:e} unless defined? errors
@@ -206,8 +426,8 @@ debugger
 				id_column_name = model.primary_key
 				created_at = model.attribute_alias?("created_at") ? model.attribute_alias("created_at") : "created_at"
 				updated_at = model.attribute_alias?("updated_at") ? model.attribute_alias("updated_at") : "updated_at"
-				solitary_queries = []
-				t = model.arel_table
+				solitary_queries = []	# I think this can be deleted
+				t = model.arel_table	# I think this can be deleted
 
 				# organize by unique column sets
 				unique_column_sets = {}
@@ -290,6 +510,7 @@ debugger
 			end
 		end
 
+
 		def mass_insert_by_table json_objects, key:{}
 			begin		
 				tables = json_objects.collect{|x| x[key[:table]]}.to_set.to_a
@@ -297,6 +518,8 @@ debugger
 				errors = {}
 				tables.each do |table|
 					hashes = json_objects.select{|o| o[key[:table]] == table}.collect{|x| x[key[:object]]}
+
+					errors[table.to_sym] = {} unless errors[table.to_sym].is_a? Hash
 					errors[table.to_sym].merge! mass_insert hashes, into:table
 				end
 				return errors
@@ -313,26 +536,11 @@ debugger
 
 				# create an array of single insert queries
 				model = into.is_a?(String) ? into.classify.constantize : into
-				id_column_name = model.primary_key
-				created_at = model.attribute_alias?("created_at") ? model.attribute_alias("created_at") : "created_at"
-				updated_at = model.attribute_alias?("updated_at") ? model.attribute_alias("updated_at") : "updated_at"
-				solitary_queries = []
-				t = model.arel_table
 				concentrated_queries = {}
 
-				hashes.each do |h|
-					# assemble an individual query
-					original_key_set = h.keys
-					im = Arel::InsertManager.new(ActiveRecord::Base)
-					unless id_column_name.is_a? Array 	# don't modify the id fields if there are concatenated primary keys
-						h.delete id_column_name if model.columns.select{|x| x.name == id_column_name}.first.extra == 'auto_increment' or h[id_column_name].blank?
-					end
-					h = convert_to_db_format h, model:model, created_at:created_at, updated_at:updated_at
-					pairs = h.collect do |k,v|
-						[t[k.to_sym],v]
-					end
-					im.insert pairs
-					sql = im.to_sql
+				hashes.each do |hash|
+					original_key_set = hash.keys.sort
+					sql = sql_for_insert hash, into:model
 
 					# group the queries by unique column lists
 					into_clause = sql.gsub /\s*VALUES.*$/,''
@@ -340,9 +548,8 @@ debugger
 					
 					concentrated_queries[original_key_set] = {} unless concentrated_queries[original_key_set].is_a? Hash
 					concentrated_queries[original_key_set][:into] = into_clause
-					concentrated_queries[original_key_set][:values] = [] unless concentrated_queries[original_key_set].is_a? Array
+					concentrated_queries[original_key_set][:values] = [] unless concentrated_queries[original_key_set][:values].is_a? Array
 					concentrated_queries[original_key_set][:values] << value_clause
-
 				end
 
 				errors = {}
