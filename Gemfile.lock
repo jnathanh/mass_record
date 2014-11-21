@@ -1,7 +1,7 @@
 PATH
   remote: .
   specs:
-    mass_record (0.0.1)
+    mass_record (0.0.2)
       rails (~> 4)
 
 GEM
