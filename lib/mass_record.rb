@@ -51,13 +51,18 @@ module MassRecord
 			}
 
 			object_array = [object_array] unless object_array.is_a? Array
+			return false if object_array.blank?
+			
 			queue = []
 
 			object_array.each do |object|
-				queue << {key[:table] => object.class.table_name, key[:operation] =>  operation, key[:object] => object} unless object.blank?
+				queue << {key[:table] => object.class.name, key[:operation] =>  operation, key[:object] => object} unless object.blank?
 			end
-
-			File.open(folder[:queued]+"/#{operation.to_s}_#{file_tag}.json",'w'){|f| f.write queue.to_json}
+			# begin
+				File.open(folder[:queued]+"/#{operation.to_s}_#{file_tag}.json",'w'){|f| f.write queue.to_json}				
+			# rescue Exception => e
+			# 	pp "#{e.message}\n#{e.backtrace[0..5].pretty_inspect}".red
+			# end
 		end
 
 		def execute_queued_queries key:{
@@ -117,7 +122,7 @@ module MassRecord
 			# close database connection
 
 			# move to appropriate folder and remove '.processing' from the filename
-			errors_present = errors.any?{|op,tables| tables.has_key? :run_time or tables.any?{|table,col_sets| !table.blank?}}
+			errors_present = errors.any?{|op,tables| tables.has_key? :run_time or tables.any?{|table,col_sets| !col_sets.blank?}}
 			errored_objects = collect_errored_objects found_in:errors, from:json_objects, key:key, synonyms:synonyms if errors_present
 
 			individual_errors = errors_present ? (query_per_object errored_objects, key:key, synonyms:synonyms) : []
@@ -213,7 +218,8 @@ module MassRecord
 			return {} if from.blank? or for_table.blank?
 			table = for_table
 			hashes = from.select{|o| o[key[:table]] == table}.collect{|x| x[key[:object]]}
-			model = table.classify.constantize
+			model = get_model from:for_table
+			connection = model.connection
 			pk = model.primary_key
 
 			# organize hashes based on whether they exist (based on their primary key(s)) in the table or not
@@ -223,16 +229,16 @@ module MassRecord
 				ids.each do |id|
 					equivalence_clauses = []
 					id.each do |k,v|
-						equivalence_clauses << "#{ActiveRecord::Base.connection.quote_column_name k} = #{ActiveRecord::Base.connection.quote(ActiveRecord::Base.connection.type_cast(v, model.column_types[k]))}"
+						equivalence_clauses << "#{k} = #{connection.quote(connection.type_cast(v, model.column_types[k]))}"
 					end
 					where_clauses << "(#{equivalence_clauses.join ' and '})"
 				end
-				existing_id_sets = ActiveRecord::Base.connection.execute("SELECT #{pk.join ', '} FROM #{table} WHERE #{where_clauses.join ' OR '}").collect{|x| Hash[x.map.with_index{|x,i| [pk[i],x]}]}
+				existing_id_sets = model.find_by_sql("SELECT #{pk.join ', '} FROM #{model.table_name} WHERE #{where_clauses.join ' OR '}").collect{|x| x.attributes}  #.collect{|x| Hash[x.map.with_index{|x,i| [pk[i],x]}]}
 				insert_hashes = hashes.reject{|h| existing_id_sets.any?{|set| h == h.merge(set)}}
 				update_hashes = hashes.select{|h| existing_id_sets.any?{|set| h == h.merge(set)}}
 			else
 				ids = hashes.reject{|x| x[pk].blank?}.collect{|x| x[pk]}	# should not include null values
-				existing_ids = ActiveRecord::Base.connection.execute("SELECT #{pk} FROM #{table} WHERE #{pk} in ('#{ids.join "','"}')").collect{|x| x.first.to_s}
+				existing_ids = model.find_by_sql("SELECT #{pk} FROM #{model.table_name} WHERE #{pk} in ('#{ids.join "','"}')").collect{|x| x[pk]}	# for some reason model.connection.execute returns the count
 				insert_hashes = hashes.reject{|x| existing_ids.include? x[pk].to_s}
 				update_hashes = hashes.select{|x| existing_ids.include? x[pk].to_s}
 			end
@@ -250,7 +256,7 @@ module MassRecord
 					sorted_hashes = sort_save_operations from:json_objects, for_table:table, key:key
 
 					# perform the appropriate operations
-					model = table.classify.constantize
+					model = get_model from:table
 					errors += update sorted_hashes[:update], into:model unless sorted_hashes[:update].blank?
 					errors += insert sorted_hashes[:insert], into:model unless sorted_hashes[:insert].blank?
 				end	
@@ -275,9 +281,19 @@ module MassRecord
 			end
 		end
 
+		def get_model from:nil
+			return from if from.is_a? Class
+			if from.is_a? String
+				model = from.constantize rescue nil
+				model = from.classify.constantize rescue nil if model.blank?
+				return model
+			end
+			return nil
+		end
+
 		def sql_for_insert hash, into:nil
 			return nil if hash.blank? or into.blank?
-			model = into.is_a?(String) ? into.classify.constantize : into
+			model = get_model from:into
 			id_column_name = model.primary_key
 			created_at = model.attribute_alias?("created_at") ? model.attribute_alias("created_at") : "created_at"
 			updated_at = model.attribute_alias?("updated_at") ? model.attribute_alias("updated_at") : "updated_at"
@@ -288,7 +304,8 @@ module MassRecord
 			# assemble an individual query
 			im = Arel::InsertManager.new(ActiveRecord::Base)
 			unless id_column_name.is_a? Array 	# don't modify the id fields if there are concatenated primary keys
-				h.delete id_column_name if model.columns.select{|x| x.name == id_column_name}.first.extra == 'auto_increment' or h[id_column_name].blank?
+				database_column = model.columns.select{|x| x.name == id_column_name}.first
+				h.delete id_column_name if h[id_column_name].blank? or (database_column.methods.include? :extra and database_column.extra == 'auto_increment')
 			end
 			h = convert_to_db_format h, model:model, created_at:created_at, updated_at:updated_at
 			pairs = h.collect do |k,v|
@@ -300,7 +317,7 @@ module MassRecord
 
 		def sql_for_update hash, into:nil
 			return nil if hash.blank? or into.blank?
-			model = into.is_a?(String) ? into.classify.constantize : into
+			model = get_model from:into
 			id_column_name = model.primary_key
 			created_at = model.attribute_alias?("created_at") ? model.attribute_alias("created_at") : "created_at"
 			updated_at = model.attribute_alias?("updated_at") ? model.attribute_alias("updated_at") : "updated_at"
@@ -327,14 +344,15 @@ module MassRecord
 			begin
 				return false if hashes.blank? or into.blank?
 				hashes = [hashes] unless hashes.is_a? Array
+				model = get_model from:into
 
 				errors = []
 				# create an array of single insert queries
 				hashes.each do |hash|
-					sql = sql_for_insert hash, into:into
+					sql = sql_for_insert hash, into:model
 	
 					begin
-						query sql
+						query sql, connection:model
 					rescue Exception => e
 						puts e.message
 						errors << IndividualError.new(e,table:into,operation:"update",json_object:hash)
@@ -350,21 +368,20 @@ module MassRecord
 			begin
 				return false if hashes.blank? or into.blank?
 				hashes = [hashes] unless hashes.is_a? Array
+				model = get_model from:into
 
 				errors = []
 				# create an array of single insert queries
 				hashes.each do |hash|
-					sql = sql_for_insert hash, into:into
+					sql = sql_for_insert hash, into:model
 	
 					begin
-						query sql
+						query sql, connection:model
 					rescue Exception => e
 						puts e.message
 						errors << IndividualError.new(e,table:into,operation:"insert",json_object:hash)
 					end
 				end
-
-				# reparse the queries and execute them
 				return errors
 			rescue Exception => e
 				return (defined? errors) ? (errors << IndividualError.new(e, table:into, operation:"insert")) : [IndividualError.new( e, table:into, operation:"insert")]
@@ -405,7 +422,7 @@ module MassRecord
 					sorted_hashes = sort_save_operations from:json_objects, for_table:table, key:key
 
 					# perform the appropriate operations
-					model = table.classify.constantize
+					model = get_model from:table
 					errors[table.to_sym] = {}
 					errors[table.to_sym].merge! mass_update sorted_hashes[:update], into:model unless sorted_hashes[:update].blank?
 					errors[table.to_sym].merge! mass_insert sorted_hashes[:insert], into:model unless sorted_hashes[:insert].blank?
@@ -422,7 +439,7 @@ module MassRecord
 			begin
 				return false if hashes.blank? or into.blank?
 
-				model = into.is_a?(String) ? into.classify.constantize : into
+				model = get_model from:into
 				id_column_name = model.primary_key
 				created_at = model.attribute_alias?("created_at") ? model.attribute_alias("created_at") : "created_at"
 				updated_at = model.attribute_alias?("updated_at") ? model.attribute_alias("updated_at") : "updated_at"
@@ -492,12 +509,12 @@ module MassRecord
 					set_columns = []
 
 					set_fragments.each do |column, values|
-						set_columns << "#{column} = CASE #{model.table_name}.#{id_column_name} #{values.join ' '} END" unless id_column_name.is_a? Array
-						set_columns << "#{column} = CASE #{values.join ' '} END" if id_column_name.is_a? Array
+						set_columns << "#{column} = CASE #{model.table_name}.#{id_column_name} #{values.join ' ' } WHEN 'findabetterwaytodothis' THEN '0' END" unless id_column_name.is_a? Array 	#TODO: ugly hack, find a better solution
+						set_columns << "#{column} = CASE #{values.join ' '} WHEN 1=0 THEN '0' END" if id_column_name.is_a? Array
 					end
 
 					begin
-						query "#{update} #{set_columns.join ', '} #{where}"
+						query "#{update} #{set_columns.join ', '} #{where}", connection:model
 					rescue Exception => e
 						puts e.message
 						errors[column_set] = e
@@ -535,7 +552,7 @@ module MassRecord
 				return false if hashes.blank? or into.blank?
 
 				# create an array of single insert queries
-				model = into.is_a?(String) ? into.classify.constantize : into
+				model = get_model from:into
 				concentrated_queries = {}
 
 				hashes.each do |hash|
@@ -557,7 +574,7 @@ module MassRecord
 				# reparse the queries and execute them
 				concentrated_queries.each do |column_set,clauses|
 					begin
-						query "#{clauses[:into]} VALUES #{clauses[:values].join(", ")}"				
+						query "#{clauses[:into]} VALUES #{clauses[:values].join(", ")}", connection:model		
 					rescue Exception => e
 						puts e.message
 						errors[column_set] = e
@@ -592,12 +609,16 @@ module MassRecord
 			return json_object
 		end
 
-		def query sql
-			if database_connection.blank?
+		def query sql, connection:database_connection
+			sql = sql.gsub /`(.*?)`/,'\1'														# some queries don't like the "`"s
+			if connection.blank?																# a blank value was passed in or the cached connection is empty
 				res = ActiveRecord::Base.connection.execute sql
 				ActiveRecord::Base.connection.close
+			elsif connection.is_a? Class and connection.ancestors.include? ActiveRecord::Base 	# an ActiveRecord Class was passed in
+				connection.connection.execute sql
+				connection.connection.close
 			else
-				res = database_connection.execute sql
+				res = connection.execute sql
 			end
 
 			return res
