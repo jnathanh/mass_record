@@ -97,7 +97,8 @@ module MassRecord
 			end
 
 			# validate all objects
-			json_objects = mass_validate json_objects
+			validation_results = mass_validate json_objects
+			json_objects = validation_results[:passed_orders]
 
 			# get all operations and tables in use
 			operations = json_objects.collect{|x| x[key[:operation]].to_sym}.to_set.to_a
@@ -132,7 +133,7 @@ module MassRecord
 			files = Dir.foreach(folder[:queued]).collect{|x| x}.keep_if{|y|y=~/\.json\.processing$/i}
 			files.each{|x| File.rename "#{folder[:queued]}/#{x}","#{errors_present ? folder[:errored] : folder[:completed]}/group_#{file_tag}_#{x.gsub /\.processing$/,''}"}
 
-			individual_errors += collect_run_time_errors found_in:errors
+			individual_errors += (collect_run_time_errors found_in:errors) + validation_results[:failed_orders]
 			return individual_errors
 		end
 
