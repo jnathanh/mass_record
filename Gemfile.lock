@@ -1,7 +1,7 @@
 PATH
   remote: .
   specs:
-    mass_record (0.0.3.1)
+    mass_record (0.0.3.2)
       colorize
       rails (~> 4)
 
