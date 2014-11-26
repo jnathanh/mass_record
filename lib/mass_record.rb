@@ -39,11 +39,12 @@ module MassRecord
 			end
 		end
 
+		# TODO: add logic to append the data if the filename already exists
 		# accepts an array of objects with the option to specify what rails operation to perform
 		def queue_for_quick_query object_array, 
 			operation: :save, 
 			folder:{queued:path[:queued_queries]}, 
-			file_tag:Time.now.strftime("%Y%m%d%H%M%S").to_s,
+			file_tag:Time.now.strftime("%Y%m%d%H%M%S%L").to_s,
 			key:{
 				table: "table",
 				operation: "operation",
@@ -52,7 +53,7 @@ module MassRecord
 
 			object_array = [object_array] unless object_array.is_a? Array
 			return false if object_array.blank?
-			
+
 			queue = []
 
 			object_array.each do |object|
@@ -79,7 +80,7 @@ module MassRecord
 				queued:path[:queued_queries],
 				errored:path[:errored_queries],
 				completed:path[:completed_queries]
-			},file_tag:Time.now.strftime("%Y%m%d%H%M%S").to_s
+			},file_tag:Time.now.strftime("%Y%m%d%H%M%S%L").to_s
 
 			files = Dir.foreach(folder[:queued]).collect{|x| x}.keep_if{|y|y=~/\.json$/i}
 			json_objects = []
