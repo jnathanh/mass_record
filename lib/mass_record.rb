@@ -1,22 +1,28 @@
 require "mass_record/engine"
 
 module MassRecord
-	mattr_accessor :path, :folder_path, :database_connection
+	mattr_accessor :path, :folder_path, :database_connection, :logger, :individual_count, :mass_count
 	self.path = {}
 	self.folder_path = "tmp/#{Rails.env}"
 	self.path[:queries] = "tmp/#{Rails.env}"
 	self.path[:queued_queries] = "tmp/#{Rails.env}"
 	self.path[:errored_queries] = "tmp/#{Rails.env}"
 	self.path[:completed_queries] = "tmp/#{Rails.env}"
-
+	logger = Logger.new STDOUT
 
 	module Actions
+		include ActionView::Helpers::TextHelper
+		mattr_accessor :individual_count, :mass_count
+		attr_accessor :individual_count, :mass_count
 		path = {}
 		folder_path = "tmp/#{Rails.env}"
 		path[:queries] = "#{folder_path}/queries"
 		path[:queued_queries] = "#{path[:queries]}/queued"
 		path[:errored_queries] = "#{path[:queries]}/errored"
 		path[:completed_queries] = "#{path[:queries]}/completed"
+		logger = Logger.new STDOUT
+		self.individual_count = 0
+		self.mass_count = 0
 
 		class IndividualError < Exception
 			attr_accessor :operation,:table,:json_object,:original_exception,:backtrace,:backtrace_locations,:cause,:exception,:message
@@ -81,6 +87,7 @@ module MassRecord
 				errored:path[:errored_queries],
 				completed:path[:completed_queries]
 			},file_tag:Time.now.strftime("%Y%m%d%H%M%S%L").to_s
+			self.individual_count = self.mass_count = 0
 
 			files = Dir.foreach(folder[:queued]).collect{|x| x}.keep_if{|y|y=~/\.json$/i}
 			json_objects = []
@@ -98,13 +105,12 @@ module MassRecord
 
 			# validate all objects
 			validation_results = mass_validate json_objects
+			logger.debug "#{validation_results[:passed_orders].count} valid objects of #{json_objects.count} total objects".black.on_white
 			json_objects = validation_results[:passed_orders]
 
 			# get all operations and tables in use
 			operations = json_objects.collect{|x| x[key[:operation]].to_sym}.to_set.to_a
-
-			# open database connection
-			database_connection = ActiveRecord::Base.connection
+			logger.debug "Operations: #{operations.pretty_inspect}".black.on_white
 
 			# construct mass queries
 			errors = {}
@@ -121,20 +127,56 @@ module MassRecord
 				end
 			end
 
-			# close database connection
-
-			# move to appropriate folder and remove '.processing' from the filename
+			# Collect mass errors and the associated objects
 			errors_present = errors.any?{|op,tables| tables.has_key? :run_time or tables.any?{|table,col_sets| !col_sets.blank?}}
 			errored_objects = collect_errored_objects found_in:errors, from:json_objects, key:key, synonyms:synonyms if errors_present
 
+			# Retry objects from the failed queries on an individual query basis
 			individual_errors = errors_present ? (query_per_object errored_objects, key:key, synonyms:synonyms) : []
-			database_connection.close
-			
-			files = Dir.foreach(folder[:queued]).collect{|x| x}.keep_if{|y|y=~/\.json\.processing$/i}
-			files.each{|x| File.rename "#{folder[:queued]}/#{x}","#{errors_present ? folder[:errored] : folder[:completed]}/group_#{file_tag}_#{x.gsub /\.processing$/,''}"}
 
+			# Collect individual errors and their associated objects with the option for custom handling
+			individually_errored_objects = collect_individually_errored_objects from:errored_objects, based_on:individual_errors, key:key
 			individual_errors += (collect_run_time_errors found_in:errors) + validation_results[:failed_orders]
+			default_error_handling = handle_individual_errors_callback errors:individual_errors, errored_objects:individually_errored_objects, all_objects:json_objects
+
+			# Save failed objects, archive all objects, and log out a summary
+			if default_error_handling
+				# Save a new file with just the errored objects in the errored folder 
+				# (which will be all the objects if there is not a 1 to 1 ratio between the errors and errored objects)
+				# THEN save a new file with ALL the objects in the completed folder
+				if individual_errors.count == individually_errored_objects.count
+					File.open("#{folder[:errored]}/errored_only_#{file_tag}.json",'w'){|f| f.write individually_errored_objects.to_json}
+					File.open("#{folder[:completed]}/#{file_tag}.json",'w'){|f| f.write json_objects.to_json}
+				else
+					File.open("#{folder[:errored]}/all_#{file_tag}.json",'w'){|f| f.write json_objects.to_json}
+				end
+
+				# Delete all the original files
+				file_names = files.collect{|x| "#{folder[:queued]}/#{x}.processing"}
+				File.delete(*file_names)
+
+				# Log out a summary of what happened
+				logger.info "\nProcessed #{pluralize((json_objects.count),'object')} with #{pluralize((individual_errors.count),'error')}".black.on_white
+				logger.info "\tMass Queries:\t\t#{self.mass_count} for #{pluralize((json_objects.count - errored_objects.count),'object')}\n\tRecovery Queries:\t#{self.individual_count} for #{pluralize(errored_objects.count,'object')}\n\tErrors:\t\t\t#{individual_errors.count}".black.on_white if individual_errors.count > 0 or logger.debug?
+				individual_errors.each_with_index{|x,i| logger.info "\t\t(#{i}) #{x.to_s[0..90]}...".black.on_white} if individual_errors.count > 0 or logger.debug?
+			end
 			return individual_errors
+		end
+
+		def handle_individual_errors_callback errors:[], errored_objects:[], all_objects:[]
+			# TODO: must be manually overidden.  Assumes a true return value means to use the engines default error handling and logging, and a false return value means to skip all subsequent actions
+			return true
+		end
+
+		def collect_individually_errored_objects from:[], based_on:[], key:{}
+			individuals = []
+			based_on.each do |error|
+				if error.is_a? IndividualError and !error.json_object.blank?
+					errored_object = from.select{|object| object[key[:table]] === error.table and object[key[:operation]] === error.operation and object[key[:object]] === error.json_object }.first
+					individuals << errored_object unless errored_object.blank? 
+				end
+			end
+			return individuals
 		end
 
 		def collect_run_time_errors found_in:{}, loop_limit:10
@@ -181,6 +223,7 @@ module MassRecord
 		end
 
 		def query_per_object objects, key:{}, synonyms:{}
+			logger.info "Executing #{objects.count} individual queries..."
 			# get all operations and tables in use
 			operations = objects.collect{|x| x[key[:operation]].to_sym}.to_set.to_a
 
@@ -304,7 +347,8 @@ module MassRecord
 			h = hash.clone	# use a copy of hash, so it doesn't change the original data
 
 			# assemble an individual query
-			im = Arel::InsertManager.new(ActiveRecord::Base)
+			# im = Arel::InsertManager.new(ActiveRecord::Base)
+			im = Arel::InsertManager.new(model)
 			unless id_column_name.is_a? Array 	# don't modify the id fields if there are concatenated primary keys
 				database_column = model.columns.select{|x| x.name == id_column_name}.first
 				h.delete id_column_name if h[id_column_name].blank? or (database_column.methods.include? :extra and database_column.extra == 'auto_increment')
@@ -329,7 +373,8 @@ module MassRecord
 			h = convert_to_db_format h, model:model, created_at:created_at, updated_at:updated_at
 
 			# assemble an individual query
-			um = Arel::UpdateManager.new(ActiveRecord::Base)
+			# um = Arel::UpdateManager.new(ActiveRecord::Base)
+			um = Arel::UpdateManager.new(model)
 			um.where(t[id_column_name.to_sym].eq(h[id_column_name])) unless id_column_name.is_a? Array
 			id_column_name.each{|key| um.where t[key.to_sym].eq(h[key])} if id_column_name.is_a? Array
 			um.table(t)
@@ -345,6 +390,8 @@ module MassRecord
 		def update hashes, into:nil
 			begin
 				return false if hashes.blank? or into.blank?
+
+				logger.debug "Update #{into.to_s}>"
 				hashes = [hashes] unless hashes.is_a? Array
 				model = get_model from:into
 
@@ -355,8 +402,11 @@ module MassRecord
 	
 					begin
 						query sql, connection:model
+						logger << ".".black.on_white if logger.debug?
+						self.individual_count += 1
 					rescue Exception => e
-						puts e.message
+						logger.debug e.message
+						logger.info e.message.to_s[0..1000]
 						errors << IndividualError.new(e,table:into,operation:"update",json_object:hash)
 					end
 				end
@@ -369,6 +419,8 @@ module MassRecord
 		def insert hashes, into:nil
 			begin
 				return false if hashes.blank? or into.blank?
+
+				logger.debug "Insert #{into.to_s}>"
 				hashes = [hashes] unless hashes.is_a? Array
 				model = get_model from:into
 
@@ -376,11 +428,13 @@ module MassRecord
 				# create an array of single insert queries
 				hashes.each do |hash|
 					sql = sql_for_insert hash, into:model
-	
 					begin
 						query sql, connection:model
+						self.individual_count += 1
+						logger << ".".black.on_white if logger.debug?
 					rescue Exception => e
-						puts e.message
+						logger.debug e.message
+						logger << 'E'.black.on_white if logger.info?
 						errors << IndividualError.new(e,table:into,operation:"insert",json_object:hash)
 					end
 				end
@@ -401,6 +455,7 @@ module MassRecord
 
 				errors = {}
 				tables.each do |table|
+					# logger.info "Table: #{table}".black.on_white
 					hashes = json_objects.select{|o| o[key[:table]] == table}.collect{|x| x[key[:object]]}
 
 					errors[table.to_sym] = {} unless errors[table.to_sym].is_a? Hash
@@ -420,6 +475,7 @@ module MassRecord
 
 				errors = {}
 				tables.each do |table|
+					# logger.info "Table: #{table}".black.on_white
 					# sort the hashes by operation type
 					sorted_hashes = sort_save_operations from:json_objects, for_table:table, key:key
 
@@ -466,7 +522,7 @@ module MassRecord
 						update = 	"UPDATE #{model.table_name} SET "
 						where_clauses = []
 						id_column_name.each do |key|
-							value_set = ids.collect{|id_set| ActiveRecord::Base.connection.quote(ActiveRecord::Base.connection.type_cast(id_set[key], model.column_types[key]))}
+							value_set = ids.collect{|id_set| model.connection.quote(model.connection.type_cast(id_set[key], model.column_types[key]))}
 							where_clauses << "(#{model.table_name}.#{key} in (#{value_set.join ','}))"
 						end
 						where = "WHERE #{where_clauses.join ' and '}"
@@ -481,9 +537,9 @@ module MassRecord
 										set_fragments[k] = [] unless set_fragments.has_key? k and set_fragments[k].is_a? Array
 										case_fragments = []
 										id_column_name.each do |key|
-											case_fragments << "#{ActiveRecord::Base.connection.quote_column_name key} = #{ActiveRecord::Base.connection.quote hash[key]}"
+											case_fragments << "#{model.connection.quote_column_name key} = #{model.connection.quote hash[key]}"
 										end
-										set_fragments[k] << "WHEN (#{case_fragments.join ' and '}) THEN #{ActiveRecord::Base.connection.quote v}"
+										set_fragments[k] << "WHEN (#{case_fragments.join ' and '}) THEN #{model.connection.quote v}"
 									end
 								end
 							end
@@ -501,7 +557,7 @@ module MassRecord
 								hash.each do |k,v|
 									if k != id_column_name
 										set_fragments[k] = [] unless set_fragments.has_key? k and set_fragments[k].is_a? Array
-										set_fragments[k] << "WHEN #{ActiveRecord::Base.connection.quote hash[id_column_name]} THEN #{ActiveRecord::Base.connection.quote v}"
+										set_fragments[k] << "WHEN #{model.connection.quote hash[id_column_name]} THEN #{model.connection.quote v}"
 									end
 								end
 							end
@@ -517,8 +573,10 @@ module MassRecord
 
 					begin
 						query "#{update} #{set_columns.join ', '} #{where}", connection:model
+						self.mass_count += 1
 					rescue Exception => e
-						puts e.message
+						logger.debug e.message
+						logger.info e.message.to_s[0..1000]
 						errors[column_set] = e
 					end
 				end
@@ -536,6 +594,7 @@ module MassRecord
 
 				errors = {}
 				tables.each do |table|
+					# logger.info "Table: #{table}"
 					hashes = json_objects.select{|o| o[key[:table]] == table}.collect{|x| x[key[:object]]}
 
 					errors[table.to_sym] = {} unless errors[table.to_sym].is_a? Hash
@@ -557,7 +616,9 @@ module MassRecord
 				model = get_model from:into
 				concentrated_queries = {}
 
+				logger.debug "#{into}: Parsing #{hashes.count} hashes into a single query>".black.on_white
 				hashes.each do |hash|
+					logger << ".".black.on_white if logger.debug?
 					original_key_set = hash.keys.sort
 					sql = sql_for_insert hash, into:model
 
@@ -575,15 +636,21 @@ module MassRecord
 
 				# reparse the queries and execute them
 				concentrated_queries.each do |column_set,clauses|
+					final_query = "#{clauses[:into]} VALUES #{clauses[:values].join(", ")}"
 					begin
-						query "#{clauses[:into]} VALUES #{clauses[:values].join(", ")}", connection:model		
+						puts "press enter to continue...:"	if Rails.env = 'development' and defined?(Rails::Console) and logger.debug?
+						gets								if Rails.env = 'development' and defined?(Rails::Console) and logger.debug?
+						query final_query, connection:model
+						self.mass_count += 1
 					rescue Exception => e
-						puts e.message
+						logger.debug e.message
+						logger.info e.message.to_s[0..1000]
 						errors[column_set] = e
 					end
 				end
 				return errors
 			rescue Exception => e
+				logger.error e.message
 				return (defined? errors) ? (errors.merge!({run_time:e})) : {run_time:e}
 			end
 		end
@@ -601,12 +668,15 @@ module MassRecord
 
 				# convert to correct database type
 				begin 
-					v = ActiveRecord::Base.connection.type_cast v, model.column_types[k]
+					v = model.connection.type_cast v, model.column_types[k]
+					v = model.connection.quote_string v if v.is_a? String
 				rescue Exception => e 	# If it is a text field, automatically yamlize it if there is a non text type passed in (just like normal active record saves)
-					v = ActiveRecord::Base.connection.type_cast v.to_yaml, model.column_types[k] if e.is_a? TypeError and model.column_types[k].type == :text
+					v = model.connection.type_cast v.to_yaml, model.column_types[k] if e.is_a? TypeError and model.column_types[k].type == :text
 				end
 				json_object[k] = v
 			end
+
+			#TODO: handle if updated_at field is not present in the hash, but is in the model (so that all transactions have an accurate updated_at)
 
 			return json_object
 		end
