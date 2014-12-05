@@ -140,17 +140,19 @@ module MassRecord
 			default_error_handling = handle_individual_errors_callback errors:individual_errors, errored_objects:individually_errored_objects, all_objects:json_objects
 
 			# Save failed objects, archive all objects, and log out a summary
-			if default_error_handling
+			if default_error_handling 
 				# Save a new file with just the errored objects in the errored folder 
 				# (which will be all the objects if there is not a 1 to 1 ratio between the errors and errored objects)
 				# THEN save a new file with ALL the objects in the completed folder
-				if individual_errors.count == individually_errored_objects.count
-					File.open("#{folder[:errored]}/errored_only_#{file_tag}.json",'w'){|f| f.write individually_errored_objects.to_json}
-					File.open("#{folder[:completed]}/#{file_tag}.json",'w'){|f| f.write json_objects.to_json}
-				else
-					File.open("#{folder[:errored]}/all_#{file_tag}.json",'w'){|f| f.write json_objects.to_json}
+				if json_objects.count > 0
+					if individual_errors.count == individually_errored_objects.count
+						File.open("#{folder[:errored]}/errored_only_#{file_tag}.json",'w'){|f| f.write individually_errored_objects.to_json} if individual_errors.count > 0
+						File.open("#{folder[:completed]}/#{file_tag}.json",'w'){|f| f.write json_objects.to_json}
+					else
+						File.open("#{folder[:errored]}/all_#{file_tag}.json",'w'){|f| f.write json_objects.to_json}
+					end
 				end
-
+				
 				# Delete all the original files
 				file_names = files.collect{|x| "#{folder[:queued]}/#{x}.processing"}
 				File.delete(*file_names)
@@ -223,7 +225,7 @@ module MassRecord
 		end
 
 		def query_per_object objects, key:{}, synonyms:{}
-			logger.info "Executing #{objects.count} individual queries..."
+			logger.info "Executing #{objects.count} individual queries...".black.on_white
 			# get all operations and tables in use
 			operations = objects.collect{|x| x[key[:operation]].to_sym}.to_set.to_a
 
@@ -391,7 +393,7 @@ module MassRecord
 			begin
 				return false if hashes.blank? or into.blank?
 
-				logger.debug "Update #{into.to_s}>"
+				logger.debug "Update #{into.to_s}>".black.on_white
 				hashes = [hashes] unless hashes.is_a? Array
 				model = get_model from:into
 
@@ -420,7 +422,7 @@ module MassRecord
 			begin
 				return false if hashes.blank? or into.blank?
 
-				logger.debug "Insert #{into.to_s}>"
+				logger.debug "Insert #{into.to_s}>".black.on_white
 				hashes = [hashes] unless hashes.is_a? Array
 				model = get_model from:into
 
@@ -594,7 +596,7 @@ module MassRecord
 
 				errors = {}
 				tables.each do |table|
-					# logger.info "Table: #{table}"
+					# logger.info "Table: #{table}".black.on_white
 					hashes = json_objects.select{|o| o[key[:table]] == table}.collect{|x| x[key[:object]]}
 
 					errors[table.to_sym] = {} unless errors[table.to_sym].is_a? Hash
@@ -638,8 +640,8 @@ module MassRecord
 				concentrated_queries.each do |column_set,clauses|
 					final_query = "#{clauses[:into]} VALUES #{clauses[:values].join(", ")}"
 					begin
-						puts "press enter to continue...:"	if Rails.env = 'development' and defined?(Rails::Console) and logger.debug?
-						gets								if Rails.env = 'development' and defined?(Rails::Console) and logger.debug?
+						# puts "press enter to continue...:"	if Rails.env = 'development' and defined?(Rails::Console) and logger.debug?
+						# gets								if Rails.env = 'development' and defined?(Rails::Console) and logger.debug?
 						query final_query, connection:model
 						self.mass_count += 1
 					rescue Exception => e
