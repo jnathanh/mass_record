@@ -1,0 +1,61 @@
+<h1>Listing widgets</h1>
+
+<table>
+  <thead>
+    <tr>
+      <th>Id</th>
+      <th>Binary</th>
+      <th>Boolean</th>
+      <th>Date</th>
+      <th>Datetime</th>
+      <th>Decimal</th>
+      <th>Float</th>
+      <th>Integer</th>
+      <th>References</th>
+      <th>String</th>
+      <th>Text</th>
+      <th>Time</th>
+      <th>Timestamp</th>
+      <th>Hstore</th>
+      <th>Json</th>
+      <th>Array</th>
+      <th>Cidr address</th>
+      <th>Ip address</th>
+      <th>Mac address</th>
+      <th colspan="3"></th>
+    </tr>
+  </thead>
+
+  <tbody>
+    <% @widgets.each do |widget| %>
+      <tr>
+        <td><%= widget.id %></td>
+        <td><%= widget.binary %></td>
+        <td><%= widget.boolean %></td>
+        <td><%= widget.date %></td>
+        <td><%= widget.datetime %></td>
+        <td><%= widget.decimal %></td>
+        <td><%= widget.float %></td>
+        <td><%= widget.integer %></td>
+        <td><%= widget.references %></td>
+        <td><%= widget.string %></td>
+        <td><%= widget.text %></td>
+        <td><%= widget.time %></td>
+        <td><%= widget.timestamp %></td>
+        <td><%= widget.hstore %></td>
+        <td><%= widget.json %></td>
+        <td><%= widget.array %></td>
+        <td><%= widget.cidr_address %></td>
+        <td><%= widget.ip_address %></td>
+        <td><%= widget.mac_address %></td>
+        <td><%= link_to 'Show', widget %></td>
+        <td><%= link_to 'Edit', edit_widget_path(widget) %></td>
+        <td><%= link_to 'Destroy', widget, method: :delete, data: { confirm: 'Are you sure?' } %></td>
+      </tr>
+    <% end %>
+  </tbody>
+</table>
+
+<br>
+
+<%= link_to 'New Widget', new_widget_path %>
