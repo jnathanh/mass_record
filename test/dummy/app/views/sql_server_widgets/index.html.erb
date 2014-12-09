@@ -1,0 +1,59 @@
+<h1>Listing sql_server_widgets</h1>
+
+<table>
+  <thead>
+    <tr>
+      <th>Binary</th>
+      <th>Boolean</th>
+      <th>Date</th>
+      <th>Datetime</th>
+      <th>Decimal</th>
+      <th>Float</th>
+      <th>Integer</th>
+      <th>References</th>
+      <th>String</th>
+      <th>Text</th>
+      <th>Time</th>
+      <th>Timestamp</th>
+      <th>Hstore</th>
+      <th>Json</th>
+      <th>Array</th>
+      <th>Cidr address</th>
+      <th>Ip address</th>
+      <th>Mac address</th>
+      <th colspan="3"></th>
+    </tr>
+  </thead>
+
+  <tbody>
+    <% @sql_server_widgets.each do |sql_server_widget| %>
+      <tr>
+        <td><%= sql_server_widget.binary %></td>
+        <td><%= sql_server_widget.boolean %></td>
+        <td><%= sql_server_widget.date %></td>
+        <td><%= sql_server_widget.datetime %></td>
+        <td><%= sql_server_widget.decimal %></td>
+        <td><%= sql_server_widget.float %></td>
+        <td><%= sql_server_widget.integer %></td>
+        <td><%= sql_server_widget.references %></td>
+        <td><%= sql_server_widget.string %></td>
+        <td><%= sql_server_widget.text %></td>
+        <td><%= sql_server_widget.time %></td>
+        <td><%= sql_server_widget.timestamp %></td>
+        <td><%= sql_server_widget.hstore %></td>
+        <td><%= sql_server_widget.json %></td>
+        <td><%= sql_server_widget.array %></td>
+        <td><%= sql_server_widget.cidr_address %></td>
+        <td><%= sql_server_widget.ip_address %></td>
+        <td><%= sql_server_widget.mac_address %></td>
+        <td><%= link_to 'Show', sql_server_widget %></td>
+        <td><%= link_to 'Edit', edit_sql_server_widget_path(sql_server_widget) %></td>
+        <td><%= link_to 'Destroy', sql_server_widget, method: :delete, data: { confirm: 'Are you sure?' } %></td>
+      </tr>
+    <% end %>
+  </tbody>
+</table>
+
+<br>
+
+<%= link_to 'New Sql server widget', new_sql_server_widget_path %>

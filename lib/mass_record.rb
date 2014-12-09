@@ -87,7 +87,7 @@ module MassRecord
 				errored:path[:errored_queries],
 				completed:path[:completed_queries]
 			},file_tag:Time.now.strftime("%Y%m%d%H%M%S%L").to_s
-			self.individual_count = self.mass_count = 0
+			self.individual_count, self.mass_count, errored_objects = 0,0,[]
 
 			files = Dir.foreach(folder[:queued]).collect{|x| x}.keep_if{|y|y=~/\.json$/i}
 			json_objects = []
@@ -152,7 +152,7 @@ module MassRecord
 						File.open("#{folder[:errored]}/all_#{file_tag}.json",'w'){|f| f.write json_objects.to_json}
 					end
 				end
-				
+
 				# Delete all the original files
 				file_names = files.collect{|x| "#{folder[:queued]}/#{x}.processing"}
 				File.delete(*file_names)

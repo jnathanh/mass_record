@@ -1,0 +1,2 @@
+module SqlServerWidgetsHelper
+end

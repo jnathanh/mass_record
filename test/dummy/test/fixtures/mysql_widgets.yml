@@ -4,15 +4,15 @@ one:
   binary: 
   boolean: false
   date: 2014-12-08
-  datetime: 2014-12-08 22:14:12
+  datetime: 2014-12-08 21:04:33
   decimal: 9.99
   float: 1.5
   integer: 1
-  references_id: 32
+  references_id: 
   string: MyString
   text: MyText
-  time: 2014-12-08 22:14:12
-  timestamp: 2014-12-08 22:14:12
+  time: 2014-12-08 21:04:33
+  timestamp: 2014-12-08 21:04:33
   hstore: MyText
   json: MyText
   array: MyText
@@ -24,15 +24,15 @@ two:
   binary: 
   boolean: false
   date: 2014-12-08
-  datetime: 2014-12-08 22:14:12
+  datetime: 2014-12-08 21:04:33
   decimal: 9.99
   float: 1.5
   integer: 1
-  references_id: 32
+  references_id: 
   string: MyString
   text: MyText
-  time: 2014-12-08 22:14:12
-  timestamp: 2014-12-08 22:14:12
+  time: 2014-12-08 21:04:33
+  timestamp: 2014-12-08 21:04:33
   hstore: MyText
   json: MyText
   array: MyText

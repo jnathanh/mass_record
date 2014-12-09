@@ -53,6 +53,6 @@ class WidgetsController < ApplicationController
 
     # Only allow a trusted parameter "white list" through.
     def widget_params
-      params.require(:widget).permit(:id, :binary, :boolean, :date, :datetime, :decimal, :float, :integer, :references, :string, :text, :time, :timestamp, :hstore, :json, :array, :cidr_address, :ip_address, :mac_address)
+      params.require(:widget).permit(:binary, :boolean, :date, :datetime, :decimal, :float, :integer, :references_id, :string, :text, :time, :timestamp, :hstore, :json, :array, :cidr_address, :ip_address, :mac_address)
     end
 end

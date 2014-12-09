@@ -1,0 +1,2 @@
+module MysqlWidgetsHelper
+end

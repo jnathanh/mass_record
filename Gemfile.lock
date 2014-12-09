@@ -28,6 +28,9 @@ GEM
       activemodel (= 4.1.8)
       activesupport (= 4.1.8)
       arel (~> 5.0.0)
+    activerecord-sqlserver-adapter (4.1.0)
+      activerecord (~> 4.1.0)
+      arel
     activesupport (4.1.8)
       i18n (~> 0.6, >= 0.6.9)
       json (~> 1.7, >= 1.7.7)
@@ -46,6 +49,7 @@ GEM
     mime-types (2.4.3)
     minitest (5.4.3)
     multi_json (1.10.1)
+    mysql2 (0.3.17)
     rack (1.5.2)
     rack-test (0.6.2)
       rack (>= 1.0)
@@ -65,6 +69,7 @@ GEM
       rake (>= 0.8.7)
       thor (>= 0.18.1, < 2.0)
     rake (10.4.0)
+    random_jpg (0.2.0)
     sprockets (2.12.3)
       hike (~> 1.2)
       multi_json (~> 1.0)
@@ -78,6 +83,7 @@ GEM
     thor (0.19.1)
     thread_safe (0.3.4)
     tilt (1.4.1)
+    tiny_tds (0.6.2)
     tzinfo (1.2.2)
       thread_safe (~> 0.1)
 
@@ -85,5 +91,9 @@ PLATFORMS
   ruby
 
 DEPENDENCIES
+  activerecord-sqlserver-adapter
   mass_record!
+  mysql2
+  random_jpg
   sqlite3
+  tiny_tds

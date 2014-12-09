@@ -1,10 +1,10 @@
-<%= form_for(@widget) do |f| %>
-  <% if @widget.errors.any? %>
+<%= form_for(@mysql_widget) do |f| %>
+  <% if @mysql_widget.errors.any? %>
     <div id="error_explanation">
-      <h2><%= pluralize(@widget.errors.count, "error") %> prohibited this widget from being saved:</h2>
+      <h2><%= pluralize(@mysql_widget.errors.count, "error") %> prohibited this mysql_widget from being saved:</h2>
 
       <ul>
-      <% @widget.errors.full_messages.each do |message| %>
+      <% @mysql_widget.errors.full_messages.each do |message| %>
         <li><%= message %></li>
       <% end %>
       </ul>

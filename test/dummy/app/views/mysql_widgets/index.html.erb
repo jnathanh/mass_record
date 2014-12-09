@@ -1,0 +1,59 @@
+<h1>Listing mysql_widgets</h1>
+
+<table>
+  <thead>
+    <tr>
+      <th>Binary</th>
+      <th>Boolean</th>
+      <th>Date</th>
+      <th>Datetime</th>
+      <th>Decimal</th>
+      <th>Float</th>
+      <th>Integer</th>
+      <th>References</th>
+      <th>String</th>
+      <th>Text</th>
+      <th>Time</th>
+      <th>Timestamp</th>
+      <th>Hstore</th>
+      <th>Json</th>
+      <th>Array</th>
+      <th>Cidr address</th>
+      <th>Ip address</th>
+      <th>Mac address</th>
+      <th colspan="3"></th>
+    </tr>
+  </thead>
+
+  <tbody>
+    <% @mysql_widgets.each do |mysql_widget| %>
+      <tr>
+        <td><%= mysql_widget.binary %></td>
+        <td><%= mysql_widget.boolean %></td>
+        <td><%= mysql_widget.date %></td>
+        <td><%= mysql_widget.datetime %></td>
+        <td><%= mysql_widget.decimal %></td>
+        <td><%= mysql_widget.float %></td>
+        <td><%= mysql_widget.integer %></td>
+        <td><%= mysql_widget.references %></td>
+        <td><%= mysql_widget.string %></td>
+        <td><%= mysql_widget.text %></td>
+        <td><%= mysql_widget.time %></td>
+        <td><%= mysql_widget.timestamp %></td>
+        <td><%= mysql_widget.hstore %></td>
+        <td><%= mysql_widget.json %></td>
+        <td><%= mysql_widget.array %></td>
+        <td><%= mysql_widget.cidr_address %></td>
+        <td><%= mysql_widget.ip_address %></td>
+        <td><%= mysql_widget.mac_address %></td>
+        <td><%= link_to 'Show', mysql_widget %></td>
+        <td><%= link_to 'Edit', edit_mysql_widget_path(mysql_widget) %></td>
+        <td><%= link_to 'Destroy', mysql_widget, method: :delete, data: { confirm: 'Are you sure?' } %></td>
+      </tr>
+    <% end %>
+  </tbody>
+</table>
+
+<br>
+
+<%= link_to 'New Mysql widget', new_mysql_widget_path %>
