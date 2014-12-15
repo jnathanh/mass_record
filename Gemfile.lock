@@ -1,7 +1,7 @@
 PATH
   remote: .
   specs:
-    mass_record (0.0.4.1)
+    mass_record (0.0.4.2)
       colorize
       rails (~> 4)
 
@@ -68,7 +68,7 @@ GEM
       activesupport (= 4.1.8)
       rake (>= 0.8.7)
       thor (>= 0.18.1, < 2.0)
-    rake (10.4.0)
+    rake (10.4.2)
     random_jpg (0.2.0)
     sprockets (2.12.3)
       hike (~> 1.2)
