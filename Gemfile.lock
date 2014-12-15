@@ -1,7 +1,7 @@
 PATH
   remote: .
   specs:
-    mass_record (0.0.4.2)
+    mass_record (0.0.4.3)
       colorize
       rails (~> 4)
 
@@ -39,7 +39,7 @@ GEM
       tzinfo (~> 1.1)
     arel (5.0.1.20140414130214)
     builder (3.2.2)
-    colorize (0.7.3)
+    colorize (0.7.4)
     erubis (2.7.0)
     hike (1.2.3)
     i18n (0.6.11)
