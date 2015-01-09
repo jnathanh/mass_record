@@ -661,12 +661,11 @@ module MassRecord
 		def convert_to_db_format json_object, model:nil, created_at:'created_at', updated_at:'updated_at'
 			throw "No Model provided, cannot format the data for the specified columns" if model.blank?
 
-			json_date_regex = /^"?\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[\+\-]\d{2}:\d{2}"?$/i
 			time = Time.now.to_s(:db)
 			crud_times = [created_at,updated_at]
 			json_object.each do |k,v|
-				v = Time.parse v if v.is_a? String and v =~ json_date_regex												# fix funky to_json format if present
-				v = time if crud_times.include? k and (v.blank? or k == updated_at) and model.column_names.include? k	# add crud time if it is blank and it is a column in the model or if it is update_at just add the time
+				v = Time.parse v if v.is_a? String and [:datetime, :date, :time, :timestamp].include? model.column_types[k].type.to_sym.downcase		# fix funky to_json format if present
+				v = time if crud_times.include? k and (v.blank? or k == updated_at) and model.column_names.include? k									# add crud time if it is blank and it is a column in the model or if it is update_at just add the time
 
 				# convert to correct database type
 				begin 
