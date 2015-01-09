@@ -1,3 +1,3 @@
 module MassRecord
-  VERSION = "0.0.4.3" # removed application helper to avoid a file load error
+  VERSION = "0.0.4.4" # updated the date data conversion handling
 end
