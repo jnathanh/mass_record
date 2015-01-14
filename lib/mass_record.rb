@@ -45,6 +45,23 @@ module MassRecord
 			end
 		end
 
+		def slim_data object_array, keep:[], operation: :save
+			return object_array if keep.blank? unless operation.to_s == 'update' or object_array.any?{|x| !x.new_record?}
+			slimmed_objects = []
+
+			object_array.each do |object|
+				model = object.class
+				created_at = model.attribute_alias?("created_at") ? model.attribute_alias("created_at") : "created_at"
+				updated_at = model.attribute_alias?("updated_at") ? model.attribute_alias("updated_at") : "updated_at"
+				keepers = object.attributes.select{|k,v| object.changed.include? k} if (operation.to_s == 'update' or !object.new_record?) and keep.blank?
+				keepers = object.attributes.select{|k,v| keep.map(&:to_s).include? k} unless keep.blank?
+				keepers = keepers.merge(object.attributes.select{|k,v| [model.primary_key,created_at,updated_at].include? k}) unless keepers.blank?
+				slimmed_objects << keepers
+			end
+
+			return slimmed_objects
+		end
+
 		# TODO: add logic to append the data if the filename already exists
 		# accepts an array of objects with the option to specify what rails operation to perform
 		def queue_for_quick_query object_array, 
@@ -55,18 +72,21 @@ module MassRecord
 				table: "table",
 				operation: "operation",
 				object: "object"			
-			}
+			},only:[]
 
 			object_array = [object_array] unless object_array.is_a? Array
 			return false if object_array.blank?
+			class_array = object_array.collect{|x| x.class.name}
 
+			object_array = slim_data(object_array, keep:only, operation:operation) if operation.to_s == 'update' or !only.blank? or object_array.any?{|x| !x.new_record?}
+			
 			queue = []
 
-			object_array.each do |object|
-				queue << {key[:table] => object.class.name, key[:operation] =>  operation, key[:object] => object} unless object.blank?
+			object_array.each_with_index do |object,i|
+				queue << {key[:table] => class_array[i], key[:operation] =>  (operation.to_s.downcase == 'save' and object.new_record?) ? 'insert' : 'update' , key[:object] => object} unless object.blank?
 			end
 			# begin
-				File.open(folder[:queued]+"/#{operation.to_s}_#{file_tag}.json",'w'){|f| f.write queue.to_json}				
+				File.open(folder[:queued]+"/#{operation.to_s}_#{file_tag}.json",'w'){|f| f.write queue.to_json} unless queue.blank?
 			# rescue Exception => e
 			# 	pp "#{e.message}\n#{e.backtrace[0..5].pretty_inspect}".red
 			# end
