@@ -53,13 +53,27 @@ module MassRecord
 				model = object.class
 				created_at = model.attribute_alias?("created_at") ? model.attribute_alias("created_at") : "created_at"
 				updated_at = model.attribute_alias?("updated_at") ? model.attribute_alias("updated_at") : "updated_at"
+
+				# narrow the attributes to just the relevant ones
 				keepers = object.attributes.select{|k,v| object.changed.include? k} if (operation.to_s == 'update' or !object.new_record?) and keep.blank?
 				keepers = object.attributes.select{|k,v| keep.map(&:to_s).include? k} unless keep.blank?
-				keepers = keepers.merge(object.attributes.select{|k,v| [model.primary_key,created_at,updated_at].include? k}) unless keepers.blank?
+
+				# also keep important fields primary key, and created and updated datestamps
+				unless keepers.blank?
+					keepers = keepers.merge(object.attributes.select{|k,v| (model.primary_key+[created_at,updated_at]).include? k}) if model.primary_key.is_a? Array
+					keepers = keepers.merge(object.attributes.select{|k,v| [model.primary_key,created_at,updated_at].include? k}) unless model.primary_key.is_a? Array
+				end
+
 				slimmed_objects << keepers
 			end
 
 			return slimmed_objects
+		end
+
+		def specify_save on: nil
+			return 'save' if on.blank?
+			return (on.new_record? ? 'insert' : 'update') if on.is_a? ActiveRecord::Base
+			return 'save'
 		end
 
 		# TODO: add logic to append the data if the filename already exists
@@ -79,11 +93,15 @@ module MassRecord
 			class_array = object_array.collect{|x| x.class.name}
 
 			object_array = slim_data(object_array, keep:only, operation:operation) if operation.to_s == 'update' or !only.blank? or object_array.any?{|x| !x.new_record?}
-			
+
 			queue = []
 
 			object_array.each_with_index do |object,i|
-				queue << {key[:table] => class_array[i], key[:operation] =>  (operation.to_s.downcase == 'save' and object.new_record?) ? 'insert' : 'update' , key[:object] => object} unless object.blank?
+				queue << {
+					key[:table] => class_array[i], 
+					key[:operation] =>  (operation.to_s.downcase == 'save') ? specify_save(on:object) : operation , 
+					key[:object] => object
+				} unless object.blank?
 			end
 			# begin
 				File.open(folder[:queued]+"/#{operation.to_s}_#{file_tag}.json",'w'){|f| f.write queue.to_json} unless queue.blank?
