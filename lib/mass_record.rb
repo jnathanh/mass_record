@@ -208,11 +208,21 @@ module MassRecord
 			return true
 		end
 
+		# always returns the name of the table (String) regardless of whether the name is passed in or if the model is passed in
+		def get_table_name table
+			if table.is_a? String
+				return table
+			elsif table.methods.include? :name
+				return table.name
+			end
+			return table
+		end
+
 		def collect_individually_errored_objects from:[], based_on:[], key:{}
 			individuals = []
 			based_on.each do |error|
 				if error.is_a? IndividualError and !error.json_object.blank?
-					errored_object = from.select{|object| object[key[:table]] === error.table and object[key[:operation]] === error.operation and object[key[:object]] === error.json_object }.first
+					errored_object = from.select{|object| object[key[:table]] === get_table_name(error.table) and ['save',error.operation].include?(object[key[:operation]]) and object[key[:object]] === error.json_object }.first
 					individuals << errored_object unless errored_object.blank? 
 				end
 			end
