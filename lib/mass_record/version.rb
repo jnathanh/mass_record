@@ -1,3 +1,3 @@
 module MassRecord
-  VERSION = "0.0.4.6" # Fixed save updating trimming and save handling to account for multiple primary keys and a bug in assigning operations from save
+  VERSION = "0.0.4.7" # fixed error parsing so that only errored objects are put in the error folder
 end
