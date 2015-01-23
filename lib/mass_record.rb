@@ -714,10 +714,11 @@ module MassRecord
 			json_object.each do |k,v|
 				v = Time.parse v if v.is_a? String and [:datetime, :date, :time, :timestamp].include? model.column_types[k].type.to_sym.downcase		# fix funky to_json format if present
 				v = time if crud_times.include? k and (v.blank? or k == updated_at) and model.column_names.include? k									# add crud time if it is blank and it is a column in the model or if it is update_at just add the time
-
 				# convert to correct database type
 				begin 
 					v = model.connection.type_cast v, model.column_types[k]
+					# handles a bug in the activerecord-sqlserver-adapter gem version 4.1
+					v = (v=='f' ? 0 : 1) if model.column_types[k].sql_type == 'bit' and ['f','t'].include?(v.to_s.downcase)
 					v = model.connection.quote_string v if v.is_a? String
 				rescue Exception => e 	# If it is a text field, automatically yamlize it if there is a non text type passed in (just like normal active record saves)
 					v = model.connection.type_cast v.to_yaml, model.column_types[k] if e.is_a? TypeError and model.column_types[k].type == :text
