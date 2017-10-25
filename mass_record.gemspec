@@ -21,9 +21,9 @@ Gem::Specification.new do |s|
   s.add_dependency "colorize"
 
   s.add_development_dependency "sqlite3"
-  s.add_development_dependency "mysql2"
-  s.add_development_dependency "tiny_tds"
-  s.add_development_dependency "activerecord-sqlserver-adapter"
+  s.add_development_dependency "mysql2", "0.3.17"
+  s.add_development_dependency "tiny_tds", "2.1.0"
+  s.add_development_dependency "activerecord-sqlserver-adapter", "4.1.8"
   s.add_development_dependency "random_jpg"
 
 end
