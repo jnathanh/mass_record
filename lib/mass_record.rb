@@ -1,5 +1,11 @@
 require "mass_record/engine"
 
+class Array
+	def pretty_inspect
+		"[\n" + join(",\n") + ']'
+	end
+end
+
 module MassRecord
 	mattr_accessor :path, :folder_path, :database_connection, :logger, :individual_count, :mass_count
 	self.path = {}
@@ -148,7 +154,7 @@ module MassRecord
 
 			# get all operations and tables in use
 			operations = json_objects.collect{|x| x[key[:operation]].to_sym}.to_set.to_a
-			logger.debug "Operations: #{operations.pretty_inspect}".black.on_white
+			logger.debug "Operations: #{operations.pretty_inspect}".black.on_white rescue logger.debug "Error logging operations"
 
 			# construct mass queries
 			errors = {}
